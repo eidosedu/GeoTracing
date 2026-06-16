@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GeoTracing</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        :root {
+            --bg-color: #f0f4f8;
+            --panel-bg: rgba(255, 255, 255, 0.95);
+            --text-color: #334155;
+            --primary-color: #3b82f6;
+            --danger-color: #ef4444;
+            --success-color: #22c55e;
+            --warning-color: #f59e0b;
+            --shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            
+            /* Cores Pedagógicas das Regiões */
+            --reg-norte: #34d399;
+            --reg-nordeste: #fbbf24;
+            --reg-centro-oeste: #f87171;
+            --reg-sudeste: #60a5fa;
+            --reg-sul: #c084fc;
+            
+            --map-default: #cbd5e1;
+            --map-border: #ffffff;
+        }
+
+        * {
+            box-sizing: border-box; margin: 0; padding: 0;
+            user-select: none; -webkit-user-select: none;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            overflow: hidden; width: 100vw; height: 100vh;
+            display: flex; justify-content: center; align-items: center;
+        }
+
+        #loading {
+            position: absolute; font-size: 18px; font-weight: 600; color: #64748b; z-index: 10;
+        }
+
+        #map-container {
+            width: 100%; height: 100%; cursor: grab; opacity: 0; transition: opacity 0.5s ease;
+        }
+        #map-container:active { cursor: grabbing; }
+        #map-container svg { width: 100%; height: 100%; touch-action: none; }
+
+        /* Desativação de realces quadrados do Android WebView */
+        svg, g, path, text, object {
+            -webkit-tap-highlight-color: transparent !important;
+            -webkit-focus-ring-color: transparent !important;
+            outline: none !important;
+        }
+
+        /* Estilização Base das Fronteiras */
+        svg path.st0 {
+            fill: var(--map-default) !important;
+            stroke: var(--map-border) !important;
+            stroke-width: 0.5px !important;
+            transition: fill 0.3s ease, stroke 0.3s ease, stroke-width 0.3s ease;
+            cursor: pointer;
+        }
+
+        /* Modos de Camadas (Visualização Livre) */
+        body.show-regions .norte { fill: var(--reg-norte) !important; }
+        body.show-regions .nordeste { fill: var(--reg-nordeste) !important; }
+        body.show-regions .centro-oeste { fill: var(--reg-centro-oeste) !important; }
+        body.show-regions .sudeste { fill: var(--reg-sudeste) !important; }
+        body.show-regions .sul { fill: var(--reg-sul) !important; }
+
+        /* Estados Visuais da Dinâmica dos Jogos */
+        svg path.st0.game-selected { fill: #fde047 !important; stroke: #ca8a04 !important; stroke-width: 1.5px !important; }
+        svg path.st0.game-correct { fill: var(--success-color) !important; }
+        svg path.st0.game-incorrect { fill: var(--danger-color) !important; }
+        svg path.st0.game-calibrated { fill: #e2e8f0 !important; } 
+
+        /* Pintura Dinâmica das Regiões (Jogo 3) */
+        svg path.st0.paint-norte { fill: var(--reg-norte) !important; }
+        svg path.st0.paint-nordeste { fill: var(--reg-nordeste) !important; }
+        svg path.st0.paint-centro-oeste { fill: var(--reg-centro-oeste) !important; }
+        svg path.st0.paint-sudeste { fill: var(--reg-sudeste) !important; }
+        svg path.st0.paint-sul { fill: var(--reg-sul) !important; }
+
+        /* Legendas de Texto das Siglas */
+        .state-label {
+            opacity: 0; font-size: 11px; font-weight: 700; fill: #1e293b;
+            text-anchor: middle; dominant-baseline: central; pointer-events: none; transition: opacity 0.3s ease;
+        }
+        body.show-names .state-label { opacity: 1; }
+
+        /* Elementos das Capitais */
+        .capital-group { opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+        .capital-marker { fill: #ef4444; stroke: #ffffff; stroke-width: 1px; r: 3; }
+        .capital-name { font-size: 9px; font-weight: 600; fill: #0f172a; dominant-baseline: central; text-shadow: 1px 1px 1px rgba(255,255,255,0.9), -1px -1px 1px rgba(255,255,255,0.9); }
+        body.show-capitals .capital-group { opacity: 1; }
+
+        /* --- Interface de Controle --- */
+        .fab-container { position: fixed; right: 30px; bottom: 30px; display: flex; flex-direction: column; gap: 15px; z-index: 100; }
+        .fab {
+            width: 56px; height: 56px; border-radius: 50%; display: flex; justify-content: center; align-items: center;
+            box-shadow: var(--shadow); cursor: pointer; transition: transform 0.2s ease, background-color 0.2s ease;
+        }
+        .fab:active { transform: scale(0.95); }
+        .fab-icon { width: 24px; height: 24px; fill: white; }
+        
+        .fab-settings { background-color: #64748b; }
+        .fab-play { background-color: var(--primary-color); width: 64px; height: 64px; } 
+
+        /* --- Modais Dinâmicos --- */
+        .modal {
+            position: fixed; background: var(--panel-bg); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            padding: 24px; border-radius: 20px; box-shadow: var(--shadow); z-index: 99; opacity: 0; pointer-events: none;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); border: 1px solid rgba(255,255,255,0.5);
+        }
+        .modal.open { opacity: 1; pointer-events: all; }
+        
+        #settingsModal { bottom: 100px; right: 90px; width: 320px; transform: translateX(20px) scale(0.95); }
+        #settingsModal.open { transform: translateX(0) scale(1); }
+        
+        #gamesModal { bottom: 30px; right: 110px; width: 340px; transform: translateX(20px) scale(0.95); }
+        #gamesModal.open { transform: translateX(0) scale(1); }
+
+        .modal-header { font-size: 20px; font-weight: 700; color: var(--text-color); margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .close-btn { background: none; border: none; cursor: pointer; display: flex; }
+        .close-btn svg { width: 24px; height: 24px; fill: #94a3b8; }
+
+        .toggle-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+        .toggle-label { font-size: 16px; font-weight: 500; color: var(--text-color); cursor: pointer; }
+        .toggle-switch { position: relative; width: 52px; height: 28px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        input:checked + .slider { background-color: var(--primary-color); }
+        input:checked + .slider:before { transform: translateX(24px); }
+
+        .btn { padding: 12px 16px; border-radius: 12px; font-weight: 600; font-size: 15px; cursor: pointer; border: none; transition: all 0.2s ease; width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .btn:active { transform: scale(0.98); }
+        .btn-outline { background: transparent; border: 2px solid #e2e8f0; color: #64748b; }
+        .btn-outline:active { background: #f1f5f9; }
+        .btn-danger { background: #fee2e2; color: var(--danger-color); margin-top: 10px; }
+
+        /* Cartões de Atividades */
+        .game-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 12px; cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden; }
+        .game-card:active { transform: scale(0.98); }
+        .game-card.locked { opacity: 0.5; background: #e2e8f0; cursor: default; pointer-events: none !important; }
+        .game-card.locked:active { transform: none; }
+        .game-title { font-weight: 700; color: #334155; font-size: 16px; margin-bottom: 4px; }
+        .game-desc { font-size: 13px; color: #64748b; }
+        .lock-icon { position: absolute; top: 16px; right: 16px; width: 20px; height: 20px; fill: #94a3b8; display: block; }
+
+        /* --- Painel Rodapé Inferior --- */
+        #gameBar {
+            position: fixed; bottom: 0; left: 0; right: 0; background: var(--panel-bg); backdrop-filter: blur(10px);
+            padding: 16px 32px; box-shadow: 0 -4px 20px rgba(0,0,0,0.08); display: flex; justify-content: space-between; align-items: center;
+            transform: translateY(100%); transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); z-index: 101;
+        }
+        #gameBar.visible { transform: translateY(0); }
+        .gb-left { display: flex; align-items: center; gap: 20px; }
+        .gb-title { font-size: 20px; font-weight: 700; color: var(--text-color); }
+        .gb-progress { font-size: 16px; font-weight: 600; color: var(--primary-color); background: #eff6ff; padding: 6px 12px; border-radius: 8px; }
+        .gb-center { font-size: 24px; font-weight: 700; color: var(--text-color); text-align: center; flex: 1; }
+        .gb-right { display: flex; gap: 12px; }
+
+        .color-palette { display: none; gap: 10px; justify-content: center; }
+        .color-btn { width: 40px; height: 40px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; transition: transform 0.2s; }
+        .color-btn:active { transform: scale(0.9); }
+        .color-btn.active { border-color: #334155; transform: scale(1.1); }
+
+        /* --- Diálogo Customizado Exclusivo --- */
+        #customDialog {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(4px); display: flex; justify-content: center; align-items: center;
+            z-index: 200; opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+        }
+        #customDialog.visible { opacity: 1; pointer-events: all; }
+        .dialog-box {
+            background: white; padding: 24px; border-radius: 16px; width: 90%; max-width: 400px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); transform: scale(0.9); transition: transform 0.2s ease;
+        }
+        #customDialog.visible .dialog-box { transform: scale(1); }
+        .dialog-title { font-size: 20px; font-weight: 700; color: #1e293b; margin-bottom: 8px; }
+        .dialog-msg { font-size: 16px; color: #475569; margin-bottom: 24px; line-height: 1.5; }
+        .dialog-actions { display: flex; gap: 12px; justify-content: flex-end; }
+        .btn-dialog { padding: 10px 20px; border-radius: 8px; font-weight: 600; font-size: 15px; cursor: pointer; border: none; }
+        .btn-dialog.cancel { background: #f1f5f9; color: #475569; }
+        .btn-dialog.confirm { background: var(--primary-color); color: white; }
+
+    </style>
+</head>
+<body>
+
+    <div id="loading">Sincronizando infraestrutura geográfica...</div>
+    <div id="map-container"></div>
+
+    <div class="fab-container" id="fabGroup">
+        <div class="fab fab-settings" id="fabSettings">
+            <svg class="fab-icon" viewBox="0 0 24 24"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.06-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.73,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.06,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.43-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.49-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+        </div>
+        <div class="fab fab-play" id="fabPlay">
+            <svg class="fab-icon" viewBox="0 0 24 24" style="width:32px; height:32px; margin-left:4px;"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+    </div>
+
+    <div class="modal" id="settingsModal">
+        <div class="modal-header">
+            Configurações
+            <button class="close-btn" onclick="window.closeModals()"><svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+        </div>
+        <div class="toggle-row">
+            <label class="toggle-label" for="toggle-regions">Cores por Região</label>
+            <label class="toggle-switch"><input type="checkbox" id="toggle-regions"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+            <label class="toggle-label" for="toggle-names">Nomes dos Estados</label>
+            <label class="toggle-switch"><input type="checkbox" id="toggle-names"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+            <label class="toggle-label" for="toggle-capitals">Capitais</label>
+            <label class="toggle-switch"><input type="checkbox" id="toggle-capitals"><span class="slider"></span></label>
+        </div>
+        <button class="btn btn-danger" onclick="window.confirmarReset()">Limpar Calibração</button>
+    </div>
+
+    <div class="modal" id="gamesModal">
+        <div class="modal-header">
+            Modos de Atividade
+            <button class="close-btn" onclick="window.closeModals()"><svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+        </div>
+        <div class="game-card" onclick="window.iniciarJogo1()">
+            <div class="game-title">1. Encontre o Estado</div>
+            <div class="game-desc">Mapeie e calibre o mapa junto com a turma.</div>
+        </div>
+        <div class="game-card locked" id="cardGame2" onclick="window.iniciarJogo2()">
+            <div class="game-title">2. Jogo das Capitais</div>
+            <div class="game-desc">Identifique qual estado pertence à capital solicitada.</div>
+            <svg class="lock-icon" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+        </div>
+        <div class="game-card locked" id="cardGame3" onclick="window.iniciarJogo3()">
+            <div class="game-title">3. Pinte as Regiões</div>
+            <div class="game-desc">Use os pincéis digitais para agrupar as macrorregiões.</div>
+            <svg class="lock-icon" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+        </div>
+    </div>
+
+    <div id="gameBar">
+        <div class="gb-left">
+            <div class="gb-title" id="gbTitle">Mapeamento</div>
+            <div class="gb-progress" id="gbProgress">0/27</div>
+        </div>
+        <div class="gb-center" id="gbInstruction">Carregando comandos...</div>
+        
+        <div class="color-palette" id="gbPalette">
+            <div class="color-btn" style="background:var(--reg-norte)" onclick="window.selecionarPincel('norte', this)"></div>
+            <div class="color-btn" style="background:var(--reg-nordeste)" onclick="window.selecionarPincel('nordeste', this)"></div>
+            <div class="color-btn" style="background:var(--reg-centro-oeste)" onclick="window.selecionarPincel('centro-oeste', this)"></div>
+            <div class="color-btn" style="background:var(--reg-sudeste)" onclick="window.selecionarPincel('sudeste', this)"></div>
+            <div class="color-btn" style="background:var(--reg-sul)" onclick="window.selecionarPincel('sul', this)"></div>
+        </div>
+
+        <div class="gb-right">
+            <button class="btn btn-outline" onclick="window.solicitarSairJogo()">Sair</button>
+            <button class="btn" style="background:var(--primary-color);color:white;display:none;" id="gbActionBtn" onclick="window.executarAcaoJogo()">Confirmar</button>
+        </div>
+    </div>
+
+    <div id="customDialog">
+        <div class="dialog-box">
+            <div class="dialog-title" id="cdTitle">Aviso</div>
+            <div class="dialog-msg" id="cdMsg">Mensagem padrão.</div>
+            <div class="dialog-actions">
+                <button class="btn-dialog cancel" id="cdCancel" onclick="window.fecharDialog(false)">Cancelar</button>
+                <button class="btn-dialog confirm" id="cdConfirm" onclick="window.fecharDialog(true)">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Tabela Corrigida de Deslocamento Cartográfico Manual (ViewBox 800x600)
+        // Corrigido para garantir precisão com base no layout da lousa.
+        const ajustesPontos = {
+            "ES": { x: -65, y: -2 },
+            "RN": { x: -22, y: 40 },
+            "PE": { x: -5, y: 0 },
+            "BA": { x: -15, y: -10 },
+            "SE": { x: -4, y: 2 },
+            "AL": { x: -6, y: 2 },
+            "PI": { x: 0, y: 15 },
+            "SC": { x: 12, y: 0 }
+        };
+
+        const dadosEstados = [
+            {sigla:"AC", nome:"Acre", regiao:"norte", cap:"Rio Branco"}, {sigla:"AL", nome:"Alagoas", regiao:"nordeste", cap:"Maceió"},
+            {sigla:"AP", nome:"Amapá", regiao:"norte", cap:"Macapá"}, {sigla:"AM", nome:"Amazonas", regiao:"norte", cap:"Manaus"},
+            {sigla:"BA", nome:"Bahia", regiao:"nordeste", cap:"Salvador"}, {sigla:"CE", nome:"Ceará", regiao:"nordeste", cap:"Fortaleza"},
+            {sigla:"DF", nome:"Distrito Federal", regiao:"centro-oeste", cap:"Brasília"}, {sigla:"ES", nome:"Espírito Santo", regiao:"sudeste", cap:"Vitória"},
+            {sigla:"GO", nome:"Goiás", regiao:"centro-oeste", cap:"Goiânia"}, {sigla:"MA", nome:"Maranhão", regiao:"nordeste", cap:"São Luís"},
+            {sigla:"MT", nome:"Mato Grosso", regiao:"centro-oeste", cap:"Cuiabá"}, {sigla:"MS", nome:"Mato Grosso do Sul", regiao:"centro-oeste", cap:"Campo Grande"},
+            {sigla:"MG", nome:"Minas Gerais", regiao:"sudeste", cap:"Belo Horizonte"}, {sigla:"PA", nome:"Pará", regiao:"norte", cap:"Belém"},
+            {sigla:"PB", nome:"Paraíba", regiao:"nordeste", cap:"João Pessoa"}, {sigla:"PR", nome:"Paraná", regiao:"sul", cap:"Curitiba"},
+            {sigla:"PE", nome:"Pernambuco", regiao:"nordeste", cap:"Recife"}, {sigla:"PI", nome:"Piauí", regiao:"nordeste", cap:"Teresina"},
+            {sigla:"RJ", nome:"Rio de Janeiro", regiao:"sudeste", cap:"Rio de Janeiro"}, {sigla:"RN", nome:"Rio Grande do Norte", regiao:"nordeste", cap:"Natal"},
+            {sigla:"RS", nome:"Rio Grande do Sul", regiao:"sul", cap:"Porto Alegre"}, {sigla:"RO", nome:"Rondônia", regiao:"norte", cap:"Porto Velho"},
+            {sigla:"RR", nome:"Roraima", regiao:"norte", cap:"Boa Vista"}, {sigla:"SC", nome:"Santa Catarina", regiao:"sul", cap:"Florianópolis"},
+            {sigla:"SP", nome:"São Paulo", regiao:"sudeste", cap:"São Paulo"}, {sigla:"SE", nome:"Sergipe", regiao:"nordeste", cap:"Aracaju"},
+            {sigla:"TO", nome:"Tocantins", regiao:"norte", cap:"Palmas"}
+        ];
+
+        let calibracao = JSON.parse(localStorage.getItem('geotracing_calibracao')) || {};
+        let isCalibrated = Object.keys(calibracao).length === 27;
+        let gameState = 'IDLE'; 
+        let gameData = {}; 
+
+        const mapContainer = document.getElementById('map-container');
+        const loading = document.getElementById('loading');
+        const sModal = document.getElementById('settingsModal');
+        const gModal = document.getElementById('gamesModal');
+
+        function carregarMapa() {
+            const obj = document.createElement('object');
+            obj.type = 'image/svg+xml';
+            obj.data = 'https://eidosedu.github.io/GeoTracing/br-04.svg';
+            obj.style.width = '100%'; obj.style.height = '100%';
+
+            obj.addEventListener('load', () => {
+                try {
+                    const svgDoc = obj.contentDocument;
+                    if (!svgDoc) throw new Error("DOM inacessível.");
+                    const svgElement = svgDoc.querySelector('svg');
+                    if (!svgElement) throw new Error("Estrutura incorreta.");
+
+                    const clonado = svgElement.cloneNode(true);
+                    mapContainer.appendChild(clonado);
+                    
+                    prepararVetor();
+                    window.atualizarInterfaceBloqueios();
+                    
+                    loading.style.opacity = 0;
+                    setTimeout(() => loading.remove(), 500);
+                    mapContainer.style.opacity = 1;
+                } catch (e) {
+                    loading.innerText = "Erro ao renderizar malha vetorial.";
+                }
+            });
+            obj.addEventListener('error', () => { loading.innerText = "Erro crítico de rede no servidor."; });
+            document.body.appendChild(obj);
+            obj.style.position = 'absolute'; obj.style.left = '-9999px';
+        }
+
+        function prepararVetor() {
+            const svg = mapContainer.querySelector('svg');
+            const transformGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            transformGroup.id = "map-transform";
+            
+            while (svg.firstChild) { transformGroup.appendChild(svg.firstChild); }
+            svg.appendChild(transformGroup);
+            
+            const labelsGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            const capitalsGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            labelsGroup.id = "labels-layer"; capitalsGroup.id = "capitals-layer";
+            
+            transformGroup.appendChild(labelsGroup);
+            transformGroup.appendChild(capitalsGroup);
+
+            const paths = transformGroup.querySelectorAll('path.st0');
+            paths.forEach((p, index) => {
+                p.setAttribute('data-index', index);
+                
+                p.addEventListener('click', (e) => {
+                    if(gameState === 'IDLE') return;
+                    e.stopPropagation(); e.preventDefault();
+                    tratarCliqueNoMapa(p, index);
+                });
+                p.addEventListener('touchend', (e) => {
+                    if(gameState === 'IDLE') return;
+                    if (gameData && !gameData.draggedActive) {
+                        e.stopPropagation(); e.preventDefault();
+                        tratarCliqueNoMapa(p, index);
+                    }
+                });
+
+                if(calibracao[index]) {
+                    aplicarDadosVisuaisExistentes(p, calibracao[index], labelsGroup, capitalsGroup);
+                }
+            });
+            configurarPanZoom(svg, transformGroup);
+        }
+
+        function aplicarDadosVisuaisExistentes(path, sigla, lGroup, cGroup) {
+            const estado = dadosEstados.find(e => e.sigla === sigla);
+            if(!estado) return;
+
+            path.id = sigla;
+            path.classList.add('state', estado.regiao);
+
+            const bbox = path.getBBox();
+            let centerX = bbox.x + (bbox.width / 2);
+            let centerY = bbox.y + (bbox.height / 2);
+
+            if (ajustesPontos[sigla]) {
+                centerX += ajustesPontos[sigla].x;
+                centerY += ajustesPontos[sigla].y;
+            }
+
+            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            text.setAttribute("x", centerX); text.setAttribute("y", centerY);
+            text.setAttribute("class", "state-label"); text.setAttribute("data-sigla", sigla);
+            text.textContent = sigla;
+            lGroup.appendChild(text);
+
+            // Controle inteligente de posicionamento das capitais para micro-territórios e bordas
+            let capOffsetX = 0;
+            let capOffsetY = 12;
+
+            if (sigla === 'SE' || sigla === 'AL') {
+                // Microterritórios: Centraliza a capital exatamente colada embaixo da sigla
+                capOffsetX = 0;
+                capOffsetY = 10;
+            } else if (estado.regiao === 'nordeste' && sigla !== 'BA' && sigla !== 'MA') {
+                // Demais estados estreitos do Nordeste: Capital na lateral direita
+                capOffsetX = 18;
+                capOffsetY = 0;
+            }
+
+            const capG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            capG.setAttribute("class", "capital-group"); capG.setAttribute("data-sigla", sigla);
+            capG.setAttribute("transform", `translate(${centerX + capOffsetX}, ${centerY + capOffsetY})`);
+            
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("class", "capital-marker"); capG.appendChild(circle);
+            
+            const capText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            capText.setAttribute("class", "capital-name"); capText.setAttribute("x", 6); capText.setAttribute("y", 0);
+            capText.textContent = estado.cap; capG.appendChild(capText);
+            
+            cGroup.appendChild(capG);
+        }
+
+        // --- Escopos de Interface Amarrados ao Objeto Window Global ---
+        window.fecharModais = function() { sModal.classList.remove('open'); gModal.classList.remove('open'); };
+        window.closeModals = window.fecharModais;
+
+        document.getElementById('fabSettings').addEventListener('click', (e) => { e.stopPropagation(); window.fecharModais(); sModal.classList.add('open'); });
+        document.getElementById('fabPlay').addEventListener('click', (e) => { e.stopPropagation(); window.fecharModais(); gModal.classList.add('open'); });
+
+        window.atualizarInterfaceBloqueios = function() {
+            isCalibrated = Object.keys(calibracao).length === 27;
+            const card2 = document.getElementById('cardGame2');
+            const card3 = document.getElementById('cardGame3');
+            
+            if(isCalibrated) {
+                card2.classList.remove('locked'); card3.classList.remove('locked');
+                if(card2.querySelector('.lock-icon')) card2.querySelector('.lock-icon').style.display = 'none';
+                if(card3.querySelector('.lock-icon')) card3.querySelector('.lock-icon').style.display = 'none';
+            } else {
+                card2.classList.add('locked'); card3.classList.add('locked');
+                if(card2.querySelector('.lock-icon')) card2.querySelector('.lock-icon').style.display = 'block';
+                if(card3.querySelector('.lock-icon')) card3.querySelector('.lock-icon').style.display = 'block';
+            }
+        };
+
+        const toggles = {
+            regions: document.getElementById('toggle-regions'),
+            names: document.getElementById('toggle-names'),
+            capitals: document.getElementById('toggle-capitals')
+        };
+        window.gerenciarCamadasFisicas = function() {
+            document.body.classList.toggle('show-regions', toggles.regions.checked && gameState === 'IDLE');
+            document.body.classList.toggle('show-names', toggles.names.checked && gameState === 'IDLE');
+            document.body.classList.toggle('show-capitals', toggles.capitals.checked && gameState === 'IDLE');
+        };
+        Object.values(toggles).forEach(t => t.addEventListener('change', window.gerenciarCamadasFisicas));
+
+        window.confirmarReset = async function() {
+            window.fecharModais();
+            const res = await window.mostrarDialog('Limpar Dados', 'Deseja apagar a calibração do mapa? Isso bloqueará os modos de atividade.', 'confirm');
+            if(res) { localStorage.removeItem('geotracing_calibracao'); location.reload(); }
+        };
+
+        // --- Gerenciador das Atividades ---
+        const gameBar = document.getElementById('gameBar');
+        const gbInst = document.getElementById('gbInstruction');
+        const gbProg = document.getElementById('gbProgress');
+        const gbAct = document.getElementById('gbActionBtn');
+        const gbPalette = document.getElementById('gbPalette');
+        const gbTitle = document.getElementById('gbTitle');
+
+        window.configurarTelaDeAtividade = function(titulo) {
+            window.fecharModais();
+            document.getElementById('fabGroup').style.display = 'none';
+            document.body.classList.remove('show-regions', 'show-names', 'show-capitals');
+            gbTitle.innerText = titulo; gameBar.classList.add('visible');
+            limparGraficosJogo();
+        };
+
+        window.solicitarSairJogo = async function() {
+            const res = await window.mostrarDialog('Sair da Atividade?', 'O progresso desta rodada será cancelado.', 'confirm');
+            if(res) window.encerrarAtividade();
+        };
+
+        window.encerrarAtividade = function() {
+            gameState = 'IDLE'; gameData = {};
+            gameBar.classList.remove('visible');
+            document.getElementById('fabGroup').style.display = 'flex';
+            limparGraficosJogo();
+            window.atualizarInterfaceBloqueios();
+            window.gerenciarCamadasFisicas();
+        };
+
+        function limparGraficosJogo() {
+            document.querySelectorAll('path.st0').forEach(p => {
+                p.classList.remove('game-selected', 'game-correct', 'game-incorrect', 'game-calibrated');
+                p.classList.remove('paint-norte', 'paint-nordeste', 'paint-centro-oeste', 'paint-sudeste', 'paint-sul');
+            });
+        }
+
+        // --- Atividades Estruturadas ---
+        window.iniciarJogo1 = async function() {
+            if (Object.keys(calibracao).length === 27) {
+                window.fecharModais();
+                const recomecar = await window.mostrarDialog('Recalibrar Mapa?', 'Esta atividade já foi concluída. Deseja limpar os registros para mapear do zero com a turma?', 'confirm');
+                if (!recomecar) return;
+                
+                calibracao = {};
+                localStorage.removeItem('geotracing_calibracao');
+                limparGraficosJogo();
+                window.atualizarInterfaceBloqueios();
+                
+                const svg = mapContainer.querySelector('svg');
+                if(svg.querySelector('#labels-layer')) svg.querySelector('#labels-layer').innerHTML = '';
+                if(svg.querySelector('#capitals-layer')) svg.querySelector('#capitals-layer').innerHTML = '';
+                
+                document.querySelectorAll('path.st0').forEach(p => {
+                    p.removeAttribute('id');
+                    p.className.baseVal = 'st0';
+                });
+            }
+
+            gameState = 'GAME1';
+            window.configurarTelaDeAtividade('1. Calibração');
+            gbPalette.style.display = 'none'; gbAct.style.display = 'block'; gbAct.innerText = 'Confirmar';
+            
+            const mapeados = Object.values(calibracao);
+            gameData.lista = dadosEstados.filter(e => !mapeados.includes(e.sigla)).sort(() => Math.random() - 0.5);
+            gameData.total = dadosEstados.length;
+            gameData.selecionadoPath = null;
+            gameData.draggedActive = false;
+            
+            document.querySelectorAll('path.st0').forEach((p, idx) => {
+                if(calibracao[idx]) p.classList.add('game-calibrated');
+            });
+            rodadaJogo1();
+        };
+
+        function rodadaJogo1() {
+            if(gameData.lista.length === 0) {
+                window.mostrarDialog('Mapeamento Concluído!', 'O mapa foi inteiramente calibrado pela turma. Atividades de fixação liberadas.').then(() => window.encerrarAtividade());
+                return;
+            }
+            gameData.atual = gameData.lista[0];
+            gameData.selecionadoPath = null;
+            gbProg.innerText = `${gameData.total - gameData.lista.length}/${gameData.total}`;
+            gbInst.innerText = `Toque no estado: ${gameData.atual.nome}`;
+            gbAct.style.opacity = '0.5'; gbAct.style.pointerEvents = 'none';
+        }
+
+        window.iniciarJogo2 = function() {
+            gameState = 'GAME2';
+            window.configurarTelaDeAtividade('2. Capitais');
+            gbPalette.style.display = 'none'; gbAct.style.display = 'none';
+            
+            gameData.lista = [...dadosEstados].sort(() => Math.random() - 0.5);
+            gameData.total = dadosEstados.length;
+            gameData.draggedActive = false;
+            rodadaJogo2();
+        };
+
+        function rodadaJogo2() {
+            if(gameData.lista.length === 0) {
+                window.mostrarDialog('Parabéns!', `Vocês correlacionaram todas as capitais do Brasil com sucesso.`).then(() => window.encerrarAtividade());
+                return;
+            }
+            gameData.atual = gameData.lista[0];
+            gbProg.innerText = `${gameData.total - gameData.lista.length}/${gameData.total}`;
+            gbInst.innerText = `Onde fica a capital: ${gameData.atual.cap}?`;
+        }
+
+        window.iniciarJogo3 = function() {
+            gameState = 'GAME3';
+            window.configurarTelaDeAtividade('3. Regiões');
+            gbProg.innerText = 'Livre'; gbInst.innerText = 'Selecione um pincel regional abaixo';
+            gbPalette.style.display = 'flex'; gbAct.style.display = 'block'; gbAct.innerText = 'Validar';
+            gbAct.style.opacity = '1'; gbAct.style.pointerEvents = 'all';
+            gameData.pincel = null;
+            gameData.draggedActive = false;
+            document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+        };
+
+        window.selecionarPincel = function(regiao, btnElement) {
+            gameData.pincel = regiao;
+            document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+            btnElement.classList.add('active');
+            gbInst.innerText = `Pintando a Região: ${regiao.toUpperCase()}`;
+        };
+
+        function tratarCliqueNoMapa(path, index) {
+            if(gameState === 'GAME1') {
+                if(calibracao[index]) return; 
+                document.querySelectorAll('path.st0').forEach(p => p.classList.remove('game-selected'));
+                path.classList.add('game-selected');
+                gameData.selecionadoPath = index;
+                gbAct.style.opacity = '1'; gbAct.style.pointerEvents = 'all';
+            }
+            else if(gameState === 'GAME2') {
+                const siglaDoPath = calibracao[index];
+                if(siglaDoPath === gameData.atual.sigla) {
+                    path.classList.add('game-correct');
+                    setTimeout(() => { path.classList.remove('game-correct'); gameData.lista.shift(); rodadaJogo2(); }, 700);
+                } else {
+                    path.classList.add('game-incorrect');
+                    setTimeout(() => path.classList.remove('game-incorrect'), 500);
+                }
+            }
+            else if(gameState === 'GAME3') {
+                if(!gameData.pincel) return;
+                path.classList.remove('paint-norte', 'paint-nordeste', 'paint-centro-oeste', 'paint-sudeste', 'paint-sul');
+                path.classList.add(`paint-${gameData.pincel}`);
+            }
+        }
+
+        window.executarAcaoJogo = function() {
+            if(gameState === 'GAME1') {
+                if(gameData.selecionadoPath !== null) {
+                    calibracao[gameData.selecionadoPath] = gameData.atual.sigla;
+                    localStorage.setItem('geotracing_calibracao', JSON.stringify(calibracao));
+                    
+                    const el = document.querySelector(`path[data-index="${gameData.selecionadoPath}"]`);
+                    el.classList.remove('game-selected');
+                    
+                    const svg = mapContainer.querySelector('svg');
+                    aplicarDadosVisuaisExistentes(el, gameData.atual.sigla, svg.querySelector('#labels-layer'), svg.querySelector('#capitals-layer'));
+                    
+                    el.classList.add('game-calibrated');
+                    gameData.lista.shift();
+                    rodadaJogo1();
+                }
+            }
+            else if(gameState === 'GAME3') {
+                let acertos = 0;
+                document.querySelectorAll('path.st0').forEach((p, idx) => {
+                    const siglaReal = calibracao[idx];
+                    const estadoReal = dadosEstados.find(e => e.sigla === siglaReal);
+                    if(estadoReal && p.classList.contains(`paint-${estadoReal.regiao}`)) acertos++;
+                });
+                const totalPorcentagem = Math.round((acertos / 27) * 100);
+                window.mostrarDialog('Validação Concluída', `A turma classificou corretamente ${totalPorcentagem}% das macrorregiões do país.`).then(() => window.encerrarAtividade());
+            }
+        };
+
+        function configurarPanZoom(svgElement, transformGroup) {
+            let arrastando = false, pontoInicial = {x:0, y:0}, tAtual = {x:0, y:0, scale:1};
+            function renderizarTransform() { transformGroup.setAttribute('transform', `translate(${tAtual.x}, ${tAtual.y}) scale(${tAtual.scale})`); }
+            
+            svgElement.addEventListener('mousedown', e => { 
+                arrastando = true; 
+                if(gameState !== 'IDLE' && gameData) gameData.draggedActive = false;
+                pontoInicial = {x: e.clientX - tAtual.x, y: e.clientY - tAtual.y}; 
+            });
+            window.addEventListener('mousemove', e => { 
+                if(arrastando) { 
+                    if(gameState !== 'IDLE' && gameData) gameData.draggedActive = true;
+                    tAtual.x = e.clientX - pontoInicial.x; tAtual.y = e.clientY - pontoInicial.y; 
+                    renderizarTransform(); 
+                } 
+            });
+            window.addEventListener('mouseup', () => arrastando = false);
+
+            let distPincaInicial = null, escalaInicial = 1;
+            svgElement.addEventListener('touchstart', e => {
+                if(e.touches.length === 1) { 
+                    arrastando = true; 
+                    if(gameState !== 'IDLE' && gameData) gameData.draggedActive = false;
+                    pontoInicial = {x: e.touches[0].clientX - tAtual.x, y: e.touches[0].clientY - tAtual.y}; 
+                }
+                else if(e.touches.length === 2) { 
+                    arrastando = false; 
+                    distPincaInicial = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); 
+                    escalaInicial = tAtual.scale; 
+                }
+            }, {passive: false});
+
+            window.addEventListener('touchmove', e => {
+                if(arrastando && e.touches.length === 1) { 
+                    if(gameState !== 'IDLE' && gameData) gameData.draggedActive = true;
+                    tAtual.x = e.touches[0].clientX - pontoInicial.x; tAtual.y = e.touches[0].clientY - pontoInicial.y; 
+                    renderizarTransform(); 
+                }
+                else if(e.touches.length === 2 && distPincaInicial) { 
+                    e.preventDefault(); 
+                    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); 
+                    tAtual.scale = Math.min(Math.max((d / distPincaInicial) * escalaInicial, 0.6), 6); 
+                    renderizarTransform(); 
+                }
+            }, {passive: false});
+            
+            window.addEventListener('touchend', () => { arrastando = false; distPincaInicial = null; });
+            svgElement.addEventListener('wheel', e => { e.preventDefault(); tAtual.scale = Math.min(Math.max(tAtual.scale * (e.deltaY > 0 ? 0.9 : 1.1), 0.6), 6); renderizarTransform(); }, {passive: false});
+        }
+
+        // Sistema Mestre de Diálogos Customizados
+        let dialogResolve = null;
+        window.mostrarDialog = function(titulo, mensagem, tipo = 'alert') {
+            return new Promise((resolve) => {
+                document.getElementById('cdTitle').innerText = titulo;
+                document.getElementById('cdMsg').innerText = mensagem;
+                const cancelBtn = document.getElementById('cdCancel');
+                const confirmBtn = document.getElementById('cdConfirm');
+                
+                if(tipo === 'alert') {
+                    cancelBtn.style.display = 'none'; confirmBtn.innerText = 'OK';
+                } else {
+                    cancelBtn.style.display = 'block'; confirmBtn.innerText = 'Confirmar';
+                }
+                dialogResolve = resolve;
+                document.getElementById('customDialog').classList.add('visible');
+            });
+        };
+
+        window.fecharDialog = function(result = false) {
+            document.getElementById('customDialog').classList.remove('visible');
+            if(dialogResolve) { dialogResolve(result); dialogResolve = null; }
+        };
+
+        window.receberTextoDoKodular = function(texto) { console.log("Canal Kodular ativo:", texto); };
+        window.handleAndroidBack = function() {
+            if(document.getElementById('customDialog').classList.contains('visible')) { window.fecharDialog(); return true; }
+            if(sModal.classList.contains('open') || gModal.classList.contains('open')) { window.fecharModais(); return true; }
+            if(gameState !== 'IDLE') { window.solicitarSairJogo(); return true; }
+            if (window.AppInventor) { window.AppInventor.setWebViewString('VOLTAR_MENU'); return true; }
+            return false;
+        };
+        document.addEventListener('backbutton', e => { e.preventDefault(); window.handleAndroidBack(); }, false);
+
+        carregarMapa();
+    </script>
+</body>
+</html>
